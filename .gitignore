@@ -1,0 +1,9 @@
+/build/
+/out/
+*.wav
+*.frq
+*.tmp
+*.cache
+.vs/
+.idea/
+.DS_Store

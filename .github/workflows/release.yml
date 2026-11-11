@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag to publish (for example v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: windows-x64
+            executable: build/Release/ResynthUTAU.exe
+          - os: ubuntu-latest
+            artifact: linux-x64
+            executable: build/ResynthUTAU
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRESYNTHUTAU_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package Windows ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item build/Release/ResynthUTAU.exe package/
+          Copy-Item README.md, LICENSE, THIRD_PARTY_NOTICES.md package/
+          Copy-Item docs/FLAGS.md, docs/UTAU_COMPATIBILITY.md package/
+          Compress-Archive -Path package/* -DestinationPath ResynthUTAU-windows-x64.zip -Force
+          Get-FileHash ResynthUTAU-windows-x64.zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  ResynthUTAU-windows-x64.zip" } | Set-Content SHA256SUMS.txt
+
+      - name: Package Linux tarball
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p package
+          cp build/ResynthUTAU README.md LICENSE THIRD_PARTY_NOTICES.md package/
+          cp docs/FLAGS.md docs/UTAU_COMPATIBILITY.md package/
+          tar -czf ResynthUTAU-linux-x64.tar.gz -C package .
+          sha256sum ResynthUTAU-linux-x64.tar.gz > SHA256SUMS.txt
+
+      - name: Upload package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-${{ matrix.artifact }}
+          path: |
+            ResynthUTAU-windows-x64.zip
+            ResynthUTAU-linux-x64.tar.gz
+            SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Download Windows package
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: release-windows-x64
+          path: dist/windows
+
+      - name: Download Linux package
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: release-linux-x64
+          path: dist/linux
+
+      - name: Collect checksums
+        shell: bash
+        run: |
+          cat dist/windows/SHA256SUMS.txt dist/linux/SHA256SUMS.txt > dist/SHA256SUMS.txt
+          find dist -maxdepth 2 -type f -print
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/windows/ResynthUTAU-windows-x64.zip dist/linux/ResynthUTAU-linux-x64.tar.gz dist/SHA256SUMS.txt --clobber
+          else
+            gh release create "$TAG" dist/windows/ResynthUTAU-windows-x64.zip dist/linux/ResynthUTAU-linux-x64.tar.gz dist/SHA256SUMS.txt --generate-notes --title "ResynthUTAU $TAG"
+          fi
