@@ -1,10 +1,18 @@
 cmake_minimum_required(VERSION 3.20)
-project(ResynthUTAU VERSION 0.1.0 LANGUAGES CXX)
+project(ResynthUTAU VERSION 0.3.0 LANGUAGES CXX)
 
 option(RESYNTHUTAU_BUILD_TESTS "Build the automated test suite" ON)
 
 add_library(resynth_core
     src/AudioBuffer.cpp
+    src/FFT.cpp
+    src/PitchAnalyzer.cpp
+    src/HarmonicAnalyzer.cpp
+    src/SpectralEnvelope.cpp
+    src/NoiseAnalyzer.cpp
+    src/AnalysisEngine.cpp
+    src/HarmonicSynthesizer.cpp
+    src/NoiseSynthesizer.cpp
     src/WavReader.cpp
     src/WavWriter.cpp
     src/ParameterParser.cpp

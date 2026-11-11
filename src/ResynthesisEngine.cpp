@@ -1,9 +1,13 @@
 #include "resynth/ResynthesisEngine.hpp"
+#include "resynth/HarmonicSynthesizer.hpp"
+#include "resynth/NoiseSynthesizer.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <numbers>
+#include <vector>
 #include <stdexcept>
 
 namespace resynth {
@@ -206,6 +210,106 @@ ProcessResult renderPhase1(const AudioBuffer& input, const ResamplerParameters& 
     if (!p.flags.empty()) result.warnings.emplace_back("Flags were parsed but are not active in Phase 1: " + p.flags);
     if (p.modulation_percent != 0.0) result.warnings.emplace_back("Modulation was parsed but is not implemented in Phase 1");
     if (!p.pitch_bend_tokens.empty()) result.warnings.emplace_back("Pitch-bend data was parsed but is not implemented in Phase 1");
+    return result;
+}
+
+
+ResynthesisResult resynthesize(const dsp::AnalysisResult& analysis,
+                               const ResynthesisOptions& options) {
+    if (analysis.sample_rate == 0U || analysis.input_frames == 0U || analysis.frames.empty()) {
+        throw std::invalid_argument("Resynthesis requires a complete non-empty analysis result");
+    }
+    if (!(options.pitch_ratio > 0.0) || !std::isfinite(options.pitch_ratio) ||
+        !(options.harmonic_gain >= 0.0) || !std::isfinite(options.harmonic_gain) ||
+        !(options.aperiodic_gain >= 0.0) || !std::isfinite(options.aperiodic_gain) ||
+        !(options.peak_limit > 0.0 && options.peak_limit <= 1.0) ||
+        !std::isfinite(options.peak_limit) || !(options.edge_fade_ms >= 0.0) ||
+        !std::isfinite(options.edge_fade_ms) ||
+        (options.output_channels != 1U && options.output_channels != 2U)) {
+        throw std::invalid_argument("Invalid resynthesis options");
+    }
+
+    dsp::HarmonicSynthesisOptions harmonic_options;
+    harmonic_options.pitch_ratio = options.pitch_ratio;
+    harmonic_options.gain = options.harmonic_gain;
+    harmonic_options.phase_observation_strength = options.phase_observation_strength;
+    harmonic_options.preserve_spectral_envelope = options.preserve_spectral_envelope;
+    harmonic_options.maximum_envelope_compensation = options.maximum_envelope_compensation;
+    const std::vector<float> harmonic = dsp::synthesizeHarmonicComponent(analysis, harmonic_options);
+
+    dsp::NoiseSynthesisOptions noise_options;
+    noise_options.gain = options.aperiodic_gain;
+    noise_options.random_seed = options.noise_seed;
+    noise_options.fft_size = options.noise_fft_size;
+    const std::vector<float> aperiodic = dsp::synthesizeAperiodicComponent(analysis, noise_options);
+
+    ResynthesisResult result;
+    result.audio.sample_rate = analysis.sample_rate;
+    result.audio.channels = options.output_channels;
+    result.audio.samples.resize(analysis.input_frames * options.output_channels, 0.0F);
+
+    const double fade_requested = options.edge_fade_ms *
+        static_cast<double>(analysis.sample_rate) / 1000.0;
+    const double maximum_fade = static_cast<double>(analysis.input_frames / 2U);
+    const std::size_t fade_frames = static_cast<std::size_t>(std::llround(
+        std::clamp(fade_requested, 0.0, maximum_fade)));
+    double harmonic_power = 0.0;
+    double aperiodic_power = 0.0;
+    double mixed_power = 0.0;
+    double peak = 0.0;
+
+    for (std::size_t frame = 0U; frame < analysis.input_frames; ++frame) {
+        double fade = 1.0;
+        if (fade_frames > 0U) {
+            if (frame < fade_frames) {
+                const double phase = static_cast<double>(frame + 1U) /
+                                     static_cast<double>(fade_frames);
+                fade *= 0.5 - 0.5 * std::cos(std::numbers::pi * phase);
+            }
+            const std::size_t remaining = analysis.input_frames - 1U - frame;
+            if (remaining < fade_frames) {
+                const double phase = static_cast<double>(remaining + 1U) /
+                                     static_cast<double>(fade_frames);
+                fade *= 0.5 - 0.5 * std::cos(std::numbers::pi * phase);
+            }
+        }
+        const double h = static_cast<double>(harmonic[frame]) * fade;
+        const double n = static_cast<double>(aperiodic[frame]) * fade;
+        const double mixed = h + n;
+        harmonic_power += h * h;
+        aperiodic_power += n * n;
+        mixed_power += mixed * mixed;
+        peak = std::max(peak, std::abs(mixed));
+        for (std::size_t channel = 0U; channel < options.output_channels; ++channel) {
+            result.audio.samples[frame * options.output_channels + channel] =
+                static_cast<float>(std::isfinite(mixed) ? mixed : 0.0);
+        }
+    }
+
+    const double frame_count = static_cast<double>(analysis.input_frames);
+    result.metrics.harmonic_rms = std::sqrt(harmonic_power / frame_count);
+    result.metrics.aperiodic_rms = std::sqrt(aperiodic_power / frame_count);
+    result.metrics.mixed_rms = std::sqrt(mixed_power / frame_count);
+    result.metrics.peak_before_limiter = peak;
+    if (peak > options.peak_limit) {
+        result.metrics.applied_gain = options.peak_limit / peak;
+        result.metrics.peak_limited = true;
+        for (float& sample : result.audio.samples) {
+            sample = static_cast<float>(static_cast<double>(sample) * result.metrics.applied_gain);
+        }
+        result.warnings.emplace_back("A global peak guard reduced output gain to prevent clipping");
+    }
+
+    if (analysis.summary.voiced_frames == 0U) {
+        result.warnings.emplace_back("No reliably voiced frames were detected; output contains only the aperiodic component");
+    }
+    if (options.pitch_ratio != 1.0 && options.preserve_spectral_envelope) {
+        result.warnings.emplace_back("Spectral-envelope compensation is an interpolated cepstral approximation, not a dedicated formant tracker");
+    }
+    if (options.output_channels == 2U) {
+        result.warnings.emplace_back("Analysis is mono-downmixed; stereo output duplicates the reconstructed mono signal");
+    }
+    result.warnings.emplace_back("Phase 3 is an offline analysis-to-resynthesis path; UTAU note timing, consonant protection, and native renderer integration remain Phase 4 work");
     return result;
 }
 

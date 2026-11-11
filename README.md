@@ -1,62 +1,105 @@
 # ResynthUTAU
 
-**Phase 1 foundation — version 0.1.0**
-Independent C++20 UTAU resampler foundation. The long-term direction is a harmonic-plus-aperiodic resynthesis engine inspired by publicly described vocal-synthesis principles associated with Piapro Studio NT. This project is not affiliated with or endorsed by Crypton Future Media or Yamaha, and it does not reproduce their proprietary software or undocumented algorithms.
+**Phase 3 — harmonic/aperiodic resynthesis, version 0.3.0**
 
-> **Important status note:** This is a working Phase 1 foundation, not the completed resynthesis engine described in the development roadmap. It reads WAV samples, applies offset/end-blank trimming, a waveform-domain WSOLA-style duration adjustment, fixed-region/velocity handling, volume, and writes PCM16 WAV. It currently preserves the source pitch. Harmonic analysis, aperiodic analysis, pitch/formant reconstruction, pitch bends, and expression flags are not yet implemented. The program prints warnings for those unimplemented controls rather than pretending they work.
+ResynthUTAU is an independent C++20 UTAU resampler and vocal-analysis/resynthesis project. Its long-term direction is a harmonic-plus-aperiodic engine inspired by publicly described vocal-synthesis principles associated with Piapro Studio NT. It is not affiliated with or endorsed by Crypton Future Media or Yamaha, and it does not copy proprietary source code, voicebank data, or undocumented algorithms.
 
-## Current capabilities
+> **Current status:** Phase 1 provides WAV I/O and a functional UTAU-style timing renderer. Phase 2 adds FFT/YIN vocal analysis, harmonic partial measurements, cepstral spectral-envelope estimates, and aperiodicity profiles. Phase 3 now reconstructs the analysis as a continuous-phase harmonic oscillator bank plus independently synthesized, spectrally shaped aperiodic noise. It supports offline pitch-ratio changes and component mixing. **The conventional UTAU positional invocation still uses the Phase 1 timing renderer**; Phase 3 is exposed through a separate diagnostic command. Consonant/transient-aware rendering, note timing integration, and real-world UTAU/OpenUTAU validation remain future work.
+
+## What's new in Phase 3
+
+- Harmonic oscillator-bank resynthesis with sample-by-sample phase integration.
+- Bounded inter-frame phase-observation corrections to preserve measured phase movement without resetting oscillators at analysis-frame boundaries.
+- Interpolated harmonic amplitudes and F0 trajectories.
+- Optional spectral-envelope compensation during pitch-ratio changes, using the Phase 2 cepstral profile as an approximation.
+- Independent stochastic aperiodic synthesis from the analyzed log-frequency residual profile.
+- Deterministic noise generation from a configurable seed and window-power-normalized overlap-add.
+- Independent harmonic and aperiodic gains, output-channel selection, edge fades, and a global peak guard.
+- `--resynthesize` command for offline analysis-to-waveform reconstruction.
+
+## Offline resynthesis
+
+Render a file at its analyzed pitch:
+
+```text
+ResynthUTAU --resynthesize voice_sample.wav reconstructed.wav
+```
+
+Transpose the harmonic component by a pitch ratio while keeping the analyzed duration:
+
+```text
+ResynthUTAU --resynthesize voice_sample.wav one_semitone_up.wav 1.059463094
+```
+
+A pitch ratio is a frequency multiplier: `1.0` is unchanged, `2.0` is one octave up, and `0.5` is one octave down. The command analyzes the input first, reconstructs the periodic and aperiodic paths, merges them, applies a peak guard, and writes PCM16 WAV at the input sample rate. The current CLI returns mono output because Phase 2 analysis averages input channels. The C++ API can duplicate the reconstructed mono signal into a stereo container.
+
+The public C++ options are declared in `include/resynth/ResynthesisEngine.hpp`. They include pitch ratio, harmonic/noise gains, phase-observation strength, spectral-envelope compensation, noise seed, noise FFT size, output channels, peak ceiling, and edge-fade duration.
+
+## Analyze a WAV file
+
+Print a concise report:
+
+```text
+ResynthUTAU --analyze voice_sample.wav
+```
+
+Write a detailed JSON report:
+
+```text
+ResynthUTAU --analyze voice_sample.wav analysis.json
+```
+
+The report contains per-frame F0, periodicity, harmonic partials, spectral-envelope bands, and aperiodicity profiles. JSON reports can be large for long recordings.
+
+## Phase 1 capabilities retained
 
 - C++20 and CMake; no Python, Node.js, MATLAB, or runtime dependency for the executable.
-- Classic RIFF/WAVE input: PCM 16/24/32-bit and IEEE float 32/64-bit, mono or stereo.
+- RIFF/WAVE input: PCM16/24/32 and IEEE float32/64, mono or stereo.
 - PCM16 WAV output at the source sample rate.
 - Unicode Windows command-line argument conversion and filesystem path handling.
-- UTAU-style positional argument parsing, note-name validation, and safe range checks.
-- Offset and end-blank trimming in milliseconds.
-- Required duration with sample-count-accurate output length.
-- Fixed-region duration adjustment driven by velocity, followed by a WSOLA-style waveform time stretch for the remaining region.
-- Volume percentage and finite-value/clipping protection.
-- CTest unit tests and Windows/Linux GitHub Actions workflows.
+- UTAU-style positional argument parsing and note-name validation.
+- Offset/end-blank trimming, fixed-region velocity timing, WSOLA-style duration adjustment, requested duration, and volume.
+- CTest regression suite and Windows/Linux GitHub Actions workflow definitions.
 
-## Synthesis architecture
-
-The planned destination architecture is harmonic-plus-aperiodic resynthesis. Phase 1 intentionally implements only the WAV and command-line foundation plus waveform-domain duration rendering. It does **not** yet claim to analyze or reconstruct harmonic and noise components. See [ARCHITECTURE.md](docs/ARCHITECTURE.md), [DSP_ALGORITHMS.md](docs/DSP_ALGORITHMS.md) and [LIMITATIONS.md](docs/LIMITATIONS.md).
-
-## Installation in UTAU / OpenUTAU Classic
-
-1. Build or download the Windows x64 executable from a tagged GitHub Release once one has been published.
-2. Place `ResynthUTAU.exe` in a stable folder.
-3. In UTAU, set the resampler path in Project Properties. In OpenUTAU, select the Classic renderer and configure the resampler there.
-4. Test with a copy of a voicebank and a short project first.
-
-This Phase 1 build is useful for testing command-line invocation, WAV handling, output timing, and basic duration processing. Because pitch shifting is not implemented yet, it is **not ready for normal singing production**.
-
-## Command-line usage
+## UTAU command-line usage
 
 ```text
 ResynthUTAU <input.wav> <output.wav> <pitch_note> <velocity> [flags [offset_ms length_required_ms [fixed_length_ms [end_blank_ms [volume_percent [modulation_percent [pitch_bend...]]]]]]]
 ```
 
-Example (the `-` placeholder keeps the optional flags slot empty while supplying timing values):
+The conventional invocation still uses the Phase 1 timing renderer. Its target note is parsed and validated but not yet applied as pitch transposition. Use `--resynthesize` to exercise Phase 3's analysis-to-resynthesis path. Phase 4 will integrate the analysis/synthesis engine with UTAU timing and phonetic regions.
 
-```text
-ResynthUTAU input.wav output.wav C4 100 - 0 500 100 0 100 0
+See [UTAU_COMPATIBILITY.md](docs/UTAU_COMPATIBILITY.md) and [FLAGS.md](docs/FLAGS.md).
+
+## DSP architecture and limitations
+
+Read [DSP_ALGORITHMS.md](docs/DSP_ALGORITHMS.md) for the analysis and resynthesis methods, [ARCHITECTURE.md](docs/ARCHITECTURE.md) for module boundaries, and [LIMITATIONS.md](docs/LIMITATIONS.md) for the distinction between implemented features and approximations.
+
+The noise path is a stochastic reconstruction shaped by an estimated spectral residual; it is not an exact inverse-STFT subtraction of the original source. The spectral-envelope compensation is a compact cepstral approximation, not a dedicated formant tracker. Harmonic phase observations are followed by continuous oscillators with bounded phase corrections, but this is not a full phase-locked vocoder. Consonants and transients are not yet classified or protected separately.
+
+## Build and test
+
+Requirements: CMake 3.20+ and a C++20 compiler (MSVC 2022, GCC 11+, or Clang 14+ recommended).
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRESYNTHUTAU_BUILD_TESTS=ON
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
 ```
 
-The pitch note is validated (for example `C4`, `F#3`, or `Bb4`) but is not applied in Phase 1. The `velocity` value is accepted from 0 to 200. The current fixed-region time multiplier is `2^((100 - velocity) / 100)`, so 100 leaves that region unchanged, 0 doubles its duration, and 200 halves it. This is an explicit project convention for the Phase 1 renderer, not a claim about Crypton's or every historical UTAU engine's internal scaling.
-
-See [UTAU_COMPATIBILITY.md](docs/UTAU_COMPATIBILITY.md) for argument behavior and [FLAGS.md](docs/FLAGS.md) for the current flag status.
+See [BUILDING.md](docs/BUILDING.md) for platform notes and GitHub Actions details, and [TESTING.md](docs/TESTING.md) for synthetic regression coverage.
 
 ## Platforms
 
-- **Windows 10/11 x64:** primary target; produces `ResynthUTAU.exe`.
-- **Linux x64:** supported as a development/test build; package availability depends on the tagged release workflow.
-- **macOS:** not yet configured or tested.
+- **Windows 10/11 x64:** primary target; the workflow builds `ResynthUTAU.exe`.
+- **Linux x64:** supported development/test build.
+- **macOS:** not configured or verified yet.
 
-## Builds and downloads
+## Project roadmap
 
-Every push and pull request is configured to build and test on Windows and Ubuntu using GitHub Actions. Tagged versions (`v*`) trigger a release workflow that packages Windows and Linux builds and SHA-256 checksums. No binary is included in the source repository. Releases will appear on the repository's GitHub Releases page after the workflow is run successfully.
-
-## Development status
-
-The implementation is deliberately staged. A passing Phase 1 build does not mean that the full harmonic-plus-aperiodic engine is complete. The next engineering stages are analysis, harmonic/noise separation, continuous-phase resynthesis, formant processing, pitch automation, phonetic/transient handling, and compatibility testing in real UTAU/OpenUTAU Classic projects.
+1. **Phase 1 — functional foundation:** WAV I/O, UTAU arguments, timing renderer, initial CI. Implemented.
+2. **Phase 2 — analysis:** FFT, F0, harmonic measurements, spectral envelope, aperiodicity, voiced/unvoiced labels. Implemented.
+3. **Phase 3 — resynthesis:** continuous-phase harmonic reconstruction, independent aperiodic synthesis, spectral interpolation, and component merging. Implemented as an offline path.
+4. **Phase 4 — timing and phonetics:** integrate note timing, protect consonants/transients, vowel sustain, and phoneme transitions.
+5. **Phase 5 — expression:** pitch automation, formant controls, breathiness, dynamics, and additional expression parameters.
+6. **Phase 6/7 — compatibility, optimization, and release:** test in real UTAU/OpenUTAU Classic environments and publish verified packages.
