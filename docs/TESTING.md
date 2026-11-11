@@ -1,26 +1,38 @@
-# Testing — Phase 1
+# Testing — Phase 2
 
-The test executable uses no external test framework. CTest runs the following checks:
+The project uses a small dependency-free C++ test executable registered with CTest. Tests generate synthetic signals in memory; no commercial voicebanks or copyrighted recordings are required.
 
-1. AudioBuffer validity, frame count, and interleaved channel access.
-2. PCM16 WAV writer/reader round-trip, sample rate, stereo layout, duration, and quantization tolerance.
-3. UTAU positional argument parsing, including note-to-MIDI validation and timing/volume fields.
-4. Phase 1 rendering with offset, end blank, fixed region, requested note length, stereo alignment, finite sample values, and volume attenuation.
+## Phase 1 regression coverage
 
-## Numerical targets currently covered
+- AudioBuffer validation and interleaved indexing.
+- PCM16 WAV write/read round-trip and quantization tolerance.
+- UTAU positional argument parsing and note-name validation.
+- Required duration, offset, end blank, fixed region, stereo preservation, finite output values, and volume attenuation.
 
-- Required-duration error: zero frames after conversion to output frame count.
-- PCM16 round-trip sample error: less than `0.0001` for the test signal.
-- Output: no NaN/Inf values in the tested render path.
-- Peak: samples are clamped to `[-1, 1]` before PCM16 writing.
-- Stereo: channel count and frame alignment are preserved.
+## Phase 2 analysis coverage
+
+- Radix-2 FFT forward/inverse round-trip; complex sample error must remain below `1e-10` for the deterministic test vector.
+- YIN F0 tracking on a synthetic 220 Hz harmonic tone; average F0 must remain within 2 Hz in the configured test range.
+- Voiced-frame classification and recovery of at least three harmonic partials.
+- Adaptive spectral-window selection for a 220 Hz voiced signal.
+- 256-band cepstral spectral-envelope and aperiodicity profiles; values must be finite and non-negative.
+- White-noise classification; fewer than 20% of frames may be voiced and mean aperiodicity must exceed 0.95.
+- Mixed harmonic/noise signal; both estimated component energies must be non-zero and the aperiodicity ratio must be strictly between zero and one.
+- Low/high F0 range checks, adaptive window length checks, silence rejection as voiced content, and non-finite input rejection.
+- Detailed JSON report field generation.
+
+## Run tests
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRESYNTHUTAU_BUILD_TESTS=ON
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+```
+
+## Numerical interpretation
+
+The 220 Hz and white-noise tests are controlled synthetic fixtures, not a claim of universal pitch-tracking or voice/unvoiced accuracy. They validate key algorithmic behavior and guard against regressions. Real-world tuning requires annotated voicebank samples and broader evaluation across registers, vowels, fricatives, plosives, breathy phonation, and expressive transitions.
 
 ## Not yet measured
 
-Pitch accuracy, pitch-bend continuity, formant stability, harmonic/noise isolation, consonant intelligibility, transient preservation, processing latency, peak memory, and objective perceptual quality are not Phase 1 test claims. Dedicated analysis and synthesis tests must be added when those features exist.
-
-Run locally with:
-
-```bash
-ctest --test-dir build -C Release --output-on-failure
-```
+Perceptual resynthesis quality, harmonic/noise waveform separation, pitch-bend continuity, formant stability after transposition, consonant intelligibility after time stretching, render latency in full UTAU projects, and long-session memory use remain outside Phase 2's verified claims.

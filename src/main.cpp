@@ -1,7 +1,12 @@
+#include "resynth/AnalysisEngine.hpp"
 #include "resynth/ParameterParser.hpp"
 #include "resynth/UTAUInterface.hpp"
+#include "resynth/WavReader.hpp"
 
+#include <algorithm>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -18,21 +23,79 @@ static std::string utf8FromWide(const std::wstring& value) {
     WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), needed, nullptr, nullptr);
     return result;
 }
+#endif
 
+namespace {
+
+std::filesystem::path pathFromUtf8(const std::string& value) {
+    std::u8string encoded;
+    encoded.reserve(value.size());
+    for (const unsigned char byte : value) encoded.push_back(static_cast<char8_t>(byte));
+    return std::filesystem::path(encoded);
+}
+
+void printAnalysisSummary(const resynth::dsp::AnalysisResult& analysis) {
+    std::cout << "ResynthUTAU analysis complete\n"
+              << "Sample rate: " << analysis.sample_rate << " Hz\n"
+              << "Duration: " << static_cast<double>(analysis.input_frames) /
+                                      static_cast<double>(analysis.sample_rate) << " s\n"
+              << "Frames: " << analysis.summary.total_frames << "\n"
+              << "Voiced / unvoiced: " << analysis.summary.voiced_frames << " / "
+                                      << analysis.summary.unvoiced_frames << "\n";
+    if (analysis.summary.voiced_frames > 0U) {
+        std::cout << "F0 mean / min / max: " << analysis.summary.average_f0_hz << " / "
+                  << analysis.summary.minimum_f0_hz << " / "
+                  << analysis.summary.maximum_f0_hz << " Hz\n";
+    } else {
+        std::cout << "F0: no reliably voiced frames detected\n";
+    }
+    std::cout << "Mean aperiodicity: " << analysis.summary.average_aperiodicity << "\n"
+              << "Mean spectral centroid: " << analysis.summary.average_spectral_centroid_hz << " Hz\n";
+}
+
+int run(const std::vector<std::string>& args) {
+    if (args.empty()) {
+        std::cout << "ResynthUTAU Phase 2 — analysis engine\n"
+                  << "UTAU usage:\n" << resynth::usageText()
+                  << "Analysis usage:\n  ResynthUTAU --analyze <input.wav> [report.json]\n";
+        return 0;
+    }
+
+    if (args[0] == "--analyze") {
+        if (args.size() < 2U || args.size() > 3U) {
+            throw std::runtime_error("Usage: ResynthUTAU --analyze <input.wav> [report.json]");
+        }
+        const auto input_path = pathFromUtf8(args[1]);
+        const auto decoded = resynth::readWav(input_path);
+        const auto analysis = resynth::dsp::analyzeAudio(decoded.audio);
+        printAnalysisSummary(analysis);
+        if (args.size() == 3U) {
+            const auto report_path = pathFromUtf8(args[2]);
+            std::ofstream report(report_path, std::ios::binary | std::ios::trunc);
+            if (!report) throw std::runtime_error("Could not create analysis report: " + args[2]);
+            report << resynth::dsp::analysisToJson(analysis, true);
+            if (!report) throw std::runtime_error("Failed while writing analysis report: " + args[2]);
+            std::cout << "Detailed report: " << args[2] << '\n';
+        }
+        return 0;
+    }
+
+    const auto params = resynth::parseArguments(args);
+    const auto report = resynth::renderUtauInvocation(params);
+    std::cout << "Rendered " << report.output_frames << " frames at " << report.sample_rate << " Hz\n";
+    for (const auto& warning : report.warnings) std::cerr << "[ResynthUTAU warning] " << warning << '\n';
+    return 0;
+}
+
+} // namespace
+
+#ifdef _WIN32
 int wmain(int argc, wchar_t** argv) {
     try {
-        if (argc == 1) {
-            std::cout << "ResynthUTAU Phase 1 foundation\n" << resynth::usageText();
-            return 0;
-        }
         std::vector<std::string> args;
-        args.reserve(static_cast<std::size_t>(argc - 1));
+        args.reserve(static_cast<std::size_t>(std::max(0, argc - 1)));
         for (int i = 1; i < argc; ++i) args.push_back(utf8FromWide(argv[i]));
-        const auto params = resynth::parseArguments(args);
-        const auto report = resynth::renderUtauInvocation(params);
-        std::cout << "Rendered " << report.output_frames << " frames at " << report.sample_rate << " Hz\n";
-        for (const auto& warning : report.warnings) std::cerr << "[ResynthUTAU warning] " << warning << '\n';
-        return 0;
+        return run(args);
     } catch (const std::exception& e) {
         std::cerr << "ResynthUTAU: " << e.what() << '\n';
         return 2;
@@ -41,16 +104,8 @@ int wmain(int argc, wchar_t** argv) {
 #else
 int main(int argc, char** argv) {
     try {
-        if (argc == 1) {
-            std::cout << "ResynthUTAU Phase 1 foundation\n" << resynth::usageText();
-            return 0;
-        }
         std::vector<std::string> args(argv + 1, argv + argc);
-        const auto params = resynth::parseArguments(args);
-        const auto report = resynth::renderUtauInvocation(params);
-        std::cout << "Rendered " << report.output_frames << " frames at " << report.sample_rate << " Hz\n";
-        for (const auto& warning : report.warnings) std::cerr << "[ResynthUTAU warning] " << warning << '\n';
-        return 0;
+        return run(args);
     } catch (const std::exception& e) {
         std::cerr << "ResynthUTAU: " << e.what() << '\n';
         return 2;

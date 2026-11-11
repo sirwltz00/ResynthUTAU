@@ -1,48 +1,52 @@
-# Software architecture — Phase 1
+# Software architecture — Phase 2
 
 ```text
-UTAU / OpenUTAU Classic
-        |
-        | classic positional command line
-        v
-src/main.cpp
-        |
-        v
-ParameterParser  ---> ResamplerParameters
-        |
-        v
-UTAUInterface
-        |              WavReader
-        |                  |
-        |                  v
-        |              AudioBuffer (float, interleaved)
-        |                  |
-        v                  v
-             ResynthesisEngine
-             - trim source region
-             - split fixed region / tail
-             - WSOLA-style duration adjustment
-             - volume / finite-value clamp
-                      |
-                      v
-                  WavWriter
-                      |
-                      v
-                output PCM16 WAV
+                         ResynthUTAU
+                              |
+              +---------------+----------------+
+              |                                |
+       UTAU render path                   Analysis path
+              |                                |
+      ParameterParser                  WAV reader -> AudioBuffer
+              |                                |
+         UTAUInterface                  Frame scheduler / mono fold-down
+              |                                |
+      ResynthesisEngine                  +-----+-------------------+
+      (Phase 1 timing)                    |                         |
+              |                      FFT autocorrelation       Windowed FFT
+       WAV reader/writer                    |                         |
+              |                         YIN F0 track          +------+------+
+         output WAV                          |                 |             |
+                                      Voiced/unvoiced      Harmonic      Cepstral
+                                           labels          partials      envelope
+                                                              |             |
+                                                              +------+------+
+                                                                     |
+                                                           Aperiodic residual
+                                                                     |
+                                                      256-band log-frequency profiles
+                                                                     |
+                                                         summary / JSON report
 ```
 
 ## Module boundaries
 
-- `AudioBuffer`: normalized floating-point interleaved samples, sample rate, and channel metadata.
-- `WavReader`: RIFF/WAVE chunk parsing and conversion into `AudioBuffer`.
-- `WavWriter`: PCM16 RIFF/WAVE serialization.
-- `ParameterParser`: validation of the classic positional arguments and target note name.
-- `UTAUInterface`: host-facing orchestration, path creation, WAV I/O, and render report.
-- `ResynthesisEngine`: Phase 1 timing and waveform-domain duration processing.
-- `main.cpp`: platform entry point; Windows uses a wide-character entry point and UTF-8 conversion.
+- `AudioBuffer`: normalized floating-point interleaved samples and channel metadata.
+- `WavReader` / `WavWriter`: RIFF/WAVE I/O.
+- `ParameterParser` / `UTAUInterface`: classic UTAU command-line contract and I/O orchestration.
+- `ResynthesisEngine`: Phase 1 waveform-domain timing renderer. It is still the UTAU invocation's render path in Phase 2.
+- `FFT`: in-place radix-2 Cooley–Tukey transform and inverse transform.
+- `PitchAnalyzer`: FFT-autocorrelation YIN cumulative-mean normalized difference function, parabolic lag refinement, RMS and periodicity confidence.
+- `HarmonicAnalyzer`: local spectral peak measurements around integer multiples of the tracked F0, including amplitude and phase estimates.
+- `SpectralEnvelope`: real-cepstral liftering of the log-magnitude spectrum.
+- `NoiseAnalyzer`: soft harmonic-bin mask and remaining spectral energy as an aperiodicity estimate.
+- `AnalysisEngine`: adaptive frame/window scheduling, spectral metrics, compact log-frequency feature profiles, summary aggregation, and JSON serialization.
+- `main.cpp`: UTAU renderer entry point plus the independent `--analyze` diagnostic mode.
 
-The DSP layer is independent of the UTAU command-line layer, so later analysis/synthesis modules can be introduced without changing the host-facing invocation contract. No module is created as an empty placeholder.
+## Phase 2 data model
 
-## Planned architecture extensions
+Each `AnalysisFrame` records its sample center and spectral window size, RMS, F0, YIN periodicity/confidence, voiced/unvoiced label, harmonic partials, harmonic and aperiodic energy, aperiodicity ratio, spectral centroid, spectral flatness, and two 256-band log-frequency profiles. The profile representation avoids storing two full-resolution spectra for every frame and is intended to be a compact handoff format for later synthesis work.
 
-Subsequent phases can add independent analysis products (F0 tracks, harmonic tracks, spectral envelopes, aperiodicity maps, transient markers) and synthesis processors. The current `ResynthesisEngine` can then coordinate the harmonic and aperiodic render paths while retaining the same WAV and UTAU interface modules.
+## Separation of concerns
+
+The `--analyze` mode is deliberately independent from UTAU note rendering. It reads a WAV, runs the analysis pipeline, and optionally writes a detailed JSON report. Phase 2 does not yet feed its estimates into the output renderer. Phase 3 will connect analyzed features to a continuous-phase harmonic synthesizer and a noise/aperiodic synthesizer.
