@@ -1,26 +1,53 @@
-# Testing — Phase 1
+# Testing — Phase 4
 
-The test executable uses no external test framework. CTest runs the following checks:
+The project uses a dependency-free C++ test executable registered with CTest. Tests generate synthetic signals in memory or temporary WAV files; no commercial voicebanks or copyrighted recordings are required.
 
-1. AudioBuffer validity, frame count, and interleaved channel access.
-2. PCM16 WAV writer/reader round-trip, sample rate, stereo layout, duration, and quantization tolerance.
-3. UTAU positional argument parsing, including note-to-MIDI validation and timing/volume fields.
-4. Phase 1 rendering with offset, end blank, fixed region, requested note length, stereo alignment, finite sample values, and volume attenuation.
+## Phase 1 regression coverage
 
-## Numerical targets currently covered
+- AudioBuffer validation and interleaved indexing.
+- PCM16 WAV write/read round-trip and quantization tolerance.
+- UTAU positional argument parsing, note-name validation, and numeric pitch-percent parsing (including 100% and 120%).
+- Required duration, offset/end blank cropping, fixed-region handling, stereo preservation, finite output values, and volume attenuation.
 
-- Required-duration error: zero frames after conversion to output frame count.
-- PCM16 round-trip sample error: less than `0.0001` for the test signal.
-- Output: no NaN/Inf values in the tested render path.
-- Peak: samples are clamped to `[-1, 1]` before PCM16 writing.
-- Stereo: channel count and frame alignment are preserved.
+## Phase 2 analysis coverage
 
-## Not yet measured
+- Radix-2 FFT forward/inverse round-trip.
+- YIN F0 tracking on synthetic 220 Hz, 90 Hz, and 880 Hz signals.
+- Voiced-frame classification and recovery of harmonic partials.
+- Adaptive spectral-window selection.
+- Cepstral spectral-envelope and aperiodicity profile dimensions and finite values.
+- White-noise and mixed harmonic/noise classification.
+- Silence rejection, non-finite input rejection, and detailed JSON report fields.
 
-Pitch accuracy, pitch-bend continuity, formant stability, harmonic/noise isolation, consonant intelligibility, transient preservation, processing latency, peak memory, and objective perceptual quality are not Phase 1 test claims. Dedicated analysis and synthesis tests must be added when those features exist.
+## Phase 3 resynthesis coverage
 
-Run locally with:
+- Harmonic oscillator-bank output preserves duration and reconstructs a synthetic 220 Hz fundamental within tolerance.
+- A clean 220 Hz sine does not acquire significant oscillator sidebands with the aperiodic path disabled.
+- Measured harmonic phase stays consistent across 1024-, 2048-, and 4096-sample analysis windows.
+- Pitch ratios including 2:1 produce the expected F0 change.
+- Aperiodic gain zero disables the noise path; harmonic gain zero disables the oscillator path.
+- Aperiodic output is deterministic for a fixed random seed.
+- Component mixing and peak protection remain within the configured ceiling.
+
+## Phase 4 timing and phonetics coverage
+
+- Time-mapped harmonic synthesis returns the exact stretched frame count while retaining the source F0 within 4 Hz.
+- A synthetic consonant-plus-vowel sample detects voiced and unvoiced regions.
+- The initial fixed consonant region is sample-identical at velocity 100.
+- The target note changes voiced median F0 to the requested note within test tolerance; numeric pitch percentages produce the requested frequency ratio.
+- Required length is enforced with sample accuracy.
+- Output is finite and preserves the input channel count.
+- Unvoiced-only input receives no fabricated F0 or pitch ratio and uses waveform-preserving fallback.
+- The conventional UTAU interface writes a WAV of the requested duration through the Phase 4 renderer.
+
+## Run tests
 
 ```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRESYNTHUTAU_BUILD_TESTS=ON
+cmake --build build --config Release --parallel
 ctest --test-dir build -C Release --output-on-failure
 ```
+
+## Numerical interpretation and limitations
+
+These tests verify deterministic algorithms and integration boundaries using controlled synthetic signals. They do not establish perceptual quality on real singers, complete consonant intelligibility, universal F0 reliability, or successful runtime integration with UTAU/OpenUTAU. Real-world tuning requires recorded samples across vowels, fricatives, plosives, breathy phonation, registers, and transitions, plus manual listening and host-application testing.

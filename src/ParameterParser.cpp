@@ -63,7 +63,16 @@ ResamplerParameters parseArguments(const std::vector<std::string>& args) {
     p.input_path = args[0];
     p.output_path = args[1];
     p.target_note = args[2];
-    p.target_midi = parseNoteToMidi(p.target_note);
+    try {
+        p.target_midi = parseNoteToMidi(p.target_note);
+        p.target_pitch_is_note = true;
+    } catch (const std::invalid_argument&) {
+        p.pitch_percent = parseNumber(p.target_note, "pitch percent");
+        if (p.pitch_percent < 1.0 || p.pitch_percent > 400.0) {
+            throw std::invalid_argument("Pitch percent must be between 1 and 400, or a note such as C4");
+        }
+        p.target_pitch_is_note = false;
+    }
     p.velocity = parseNumber(args[3], "velocity");
     if (p.velocity < 0.0 || p.velocity > 200.0) throw std::invalid_argument("Velocity must be between 0 and 200");
 
@@ -96,9 +105,10 @@ ResamplerParameters parseArguments(const std::vector<std::string>& args) {
 }
 
 std::string usageText() {
-    return "Usage: ResynthUTAU <input.wav> <output.wav> <pitch_note> <velocity> "
+    return "Usage: ResynthUTAU <input.wav> <output.wav> <pitch_percent_or_note> <velocity> "
            "[flags [offset_ms length_required_ms [fixed_length_ms [end_blank_ms "
            "[volume_percent [modulation_percent [pitch_bend...]]]]]]]\n"
+           "Pitch may be a numeric percentage (100 = unchanged) or a note such as C4.\n"
            "Example: ResynthUTAU input.wav output.wav C4 100 - 0 500 100 0 100 0\n";
 }
 

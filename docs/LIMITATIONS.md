@@ -1,41 +1,76 @@
-# Limitations and implementation status
+# Limitations and implementation status — Phase 4
 
 ## Implemented in Phase 1
 
-- C++20/CMake project and executable entry point.
+- C++20/CMake executable and Windows/Linux build workflows.
 - RIFF/WAVE reader for PCM16/24/32 and IEEE float32/64, mono/stereo.
 - PCM16 WAV output.
-- UTAU-style classic positional argument parsing and note-name validation.
-- Offset and end-blank trimming.
-- Fixed-region velocity duration mapping.
-- WSOLA-style duration adjustment for sufficiently long regions, with a short-region interpolation fallback.
-- Required output-duration handling, volume, finite-value handling, and clipping clamp.
-- Unit tests and Windows/Linux CI/release workflow definitions.
+- UTAU-style classic positional argument parsing, note-name targets, and numeric pitch percentages.
+- Offset/end-blank cropping, fixed-region velocity duration mapping, WSOLA-style duration adjustment, exact requested output frame count, volume, finite-value handling, and clipping protection.
 
-## Approximations
+## Implemented in Phase 2
 
-- The WSOLA implementation is an initial waveform-domain renderer, not an advanced transient classifier. Its correlation uses a mono downmix, while its chosen alignment is shared by all channels.
-- Very short segments use linear interpolation because there is insufficient context for a stable WSOLA search.
-- Phase 1's velocity duration formula is a documented project convention. It is not a claim to duplicate undocumented UTAU internals.
+- In-place radix-2 FFT and normalized inverse FFT.
+- FFT-autocorrelation YIN F0 estimation with parabolic lag refinement and periodicity confidence.
+- Voiced/unvoiced frame labels based on RMS and periodicity thresholds.
+- Adaptive power-of-two spectral windows targeting a configurable number of F0 cycles.
+- Harmonic partial amplitude and local phase observations.
+- Cepstral-lifter spectral-envelope estimation.
+- Soft harmonic-mask spectral aperiodicity/noise estimate.
+- Spectral centroid and flatness.
+- Compact 256-band log-frequency spectral-envelope and aperiodicity profiles per frame.
+- `--analyze` CLI mode and detailed JSON report export.
+
+## Implemented in Phase 3
+
+- Harmonic oscillator-bank reconstruction from analyzed harmonic partial amplitudes.
+- Sample-by-sample oscillator phase integration and bounded inter-frame phase corrections.
+- Pitch-ratio transposition in the offline API and `--resynthesize` diagnostic command.
+- Optional spectral-envelope amplitude compensation using the compact cepstral profile.
+- Independent stochastic aperiodic/noise synthesis with spectral shaping and deterministic seed behavior.
+- Component gains, output metrics, edge fades, and global peak guard.
+- Phase 3.1 center-referenced phase measurements and clean-sine residual regression.
+
+## Implemented in Phase 4
+
+- Conventional UTAU positional invocation is connected to `renderPhase4`.
+- Offset, end blank, fixed length, velocity duration mapping, required length, volume, and exact output frame count.
+- The initial fixed region is waveform-preserved at velocity 100 and WSOLA-adjusted when its duration changes.
+- Frame-level voiced/unvoiced/silence/transient classification using periodicity, local aperiodicity, spectral flatness, centroid, and RMS rise.
+- Smoothed voicing confidence for consonant-to-vowel and vowel-to-consonant transitions.
+- Waveform-preserving WSOLA path for unvoiced and transient regions.
+- Time-mapped harmonic resynthesis for voiced material, preserving oscillator pitch when output duration changes.
+- A low-level synthesized aperiodic component and a small original-waveform blend to retain some natural noise texture.
+- Median voiced-F0 targeting from a requested note, or relative pitch adjustment from a numeric percentage.
+- Short join ramp, peak guard, and unvoiced-only fallback.
+- Synthetic tests for timing, fixed-region preservation, F0-preserving sustain, target pitch, unvoiced fallback, and conventional WAV output.
+
+## Approximations and caveats
+
+- Stereo input is downmixed to mono for analysis. The mono synthesized component is blended into each channel's waveform-preserved path; independent stereo phase is not reconstructed.
+- The YIN tracker can be unreliable on very breathy, noisy, polyphonic, or strongly transient material, and median source F0 may not represent all multi-pitch or expressive samples.
+- The spectral envelope is cepstrally smoothed and compressed into 256 log-frequency values; it is not an LPC/pole formant tracker.
+- The aperiodicity estimate is an approximate spectral residual. Its resynthesized noise is stochastic and does not recreate the exact original residual waveform.
+- The phonetic classifier is not a phoneme recognizer. It cannot know language, alias, consonant identity, or OTO boundaries. It can misclassify unusual vowels, breathy phonation, and short consonants.
+- Transient detection is heuristic. It relies on local energy rise plus spectral characteristics; subtle stops can be missed and sharp vowel attacks may be overprotected.
+- WSOLA may smear very short consonants under extreme time changes. Regions shorter than 96 samples use a linear interpolation fallback.
+- The initial fixed-region velocity mapping is retained from the earlier project convention and is not claimed to match every UTAU host/resampler implementation.
 - Output is converted to PCM16, even when input is 24-bit or floating point.
 
 ## Not implemented
 
-- F0 analysis and pitch shifting.
-- Harmonic extraction and resynthesis.
-- Aperiodic/noise extraction and resynthesis.
-- Spectral-envelope and formant analysis or formant shifting.
-- Pitch bends, vibrato, portamento, or continuous pitch automation.
-- Breathiness, harmonic balance, voice voltage, noise shaping, or other expression controls.
-- Consonant/vowel classification, transient-aware segmentation, or vowel-sustain modeling.
-- FFT/STFT, cepstral/LPC analysis, or phase-coherent harmonic synthesis.
-- Actual UTAU/OpenUTAU Classic application-level integration tests.
+- Pitch-bend curves, modulation, vibrato, portamento, and time-varying pitch automation.
+- Breathiness, dynamics, note gain, voice-voltage-inspired control, consonant-rate, attack-speed, harmonic balance, noise-level, and custom expression flags.
+- Dedicated high-resolution formant tracking and independent formant shifting.
+- Explicit phoneme labels, `oto.ini` parsing, language-aware consonant classification, or phoneme-specific DSP profiles.
+- Full transient-aware phase-vocoder or neural consonant reconstruction.
+- Actual UTAU/OpenUTAU Classic application-level integration tests and listening evaluation on real voicebanks.
 - macOS build and native OpenUTAU renderer support.
 
-## Compatibility warning
+## UTAU compatibility status
 
-The Phase 1 binary is a development foundation, not yet a musically complete resampler. It can validate the host invocation, WAV decoding, timing, duration, and basic output generation. It will not transpose notes to the requested pitch, so it should not be treated as ready for normal UTAU production until later stages are implemented and verified.
+The conventional positional renderer now runs Phase 4 timing and phonetic processing, including target-note pitch adjustment on stable voiced material. The application has not yet been exercised inside UTAU or OpenUTAU Classic in this development environment. Do not treat this build as production-validated until host tests and real voicebank listening tests are complete.
 
 ## Piapro NT relationship
 
-ResynthUTAU is an independent clean-room project. Piapro Studio NT's exact internal algorithm is not asserted, reproduced, or reverse-engineered. Publicly described signal-processing concepts are used only as high-level inspiration.
+ResynthUTAU is an independent clean-room project. Piapro Studio NT's exact internal algorithm is not asserted, reproduced, or reverse-engineered. Publicly described synthesis principles serve only as high-level inspiration.

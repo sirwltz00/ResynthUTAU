@@ -1,9 +1,14 @@
 #include "resynth/ResynthesisEngine.hpp"
+#include "resynth/HarmonicSynthesizer.hpp"
+#include "resynth/NoiseSynthesizer.hpp"
+#include "resynth/PhoneticAnalyzer.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <numeric>
+#include <numbers>
+#include <vector>
 #include <stdexcept>
 
 namespace resynth {
@@ -206,6 +211,329 @@ ProcessResult renderPhase1(const AudioBuffer& input, const ResamplerParameters& 
     if (!p.flags.empty()) result.warnings.emplace_back("Flags were parsed but are not active in Phase 1: " + p.flags);
     if (p.modulation_percent != 0.0) result.warnings.emplace_back("Modulation was parsed but is not implemented in Phase 1");
     if (!p.pitch_bend_tokens.empty()) result.warnings.emplace_back("Pitch-bend data was parsed but is not implemented in Phase 1");
+    return result;
+}
+
+
+namespace {
+
+double voicedWeightAt(const dsp::AnalysisResult& analysis,
+                      const dsp::PhoneticAnalysis& phonetics,
+                      const double source_position,
+                      std::size_t& segment) {
+    const auto& frames = analysis.frames;
+    if (frames.empty()) return 0.0;
+    if (frames.size() == 1U || source_position <= static_cast<double>(frames.front().center_sample)) {
+        return phonetics.voiced_weights.front();
+    }
+    while (segment + 1U < frames.size() - 1U &&
+           source_position >= static_cast<double>(frames[segment + 1U].center_sample)) {
+        ++segment;
+    }
+    const auto& left = frames[segment];
+    const auto& right = frames[std::min(segment + 1U, frames.size() - 1U)];
+    const double span = static_cast<double>(right.center_sample - left.center_sample);
+    if (!(span > 0.0)) return phonetics.voiced_weights[segment];
+    const double t = std::clamp((source_position - static_cast<double>(left.center_sample)) / span,
+                                0.0, 1.0);
+    const double a = phonetics.voiced_weights[segment];
+    const double b = phonetics.voiced_weights[std::min(segment + 1U, frames.size() - 1U)];
+    return a + (b - a) * t;
+}
+
+double medianVoicedF0(const dsp::AnalysisResult& analysis,
+                      const dsp::PhoneticAnalysis& phonetics,
+                      std::size_t& stable_voiced_frames) {
+    std::vector<double> values;
+    values.reserve(analysis.summary.voiced_frames);
+    stable_voiced_frames = 0U;
+    for (std::size_t i = 0U; i < analysis.frames.size(); ++i) {
+        const auto& frame = analysis.frames[i];
+        if (i < phonetics.frame_kinds.size() &&
+            phonetics.frame_kinds[i] == dsp::PhoneticKind::Voiced &&
+            frame.voiced && frame.f0_hz > 0.0 && std::isfinite(frame.f0_hz)) {
+            values.push_back(frame.f0_hz);
+            ++stable_voiced_frames;
+        }
+    }
+    if (values.empty()) return 0.0;
+    const auto middle = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2U);
+    std::nth_element(values.begin(), middle, values.end());
+    if (values.size() % 2U == 1U) return *middle;
+    const auto lower = std::max_element(values.begin(), middle);
+    return 0.5 * (*lower + *middle);
+}
+
+void applyJoinRamp(AudioBuffer& fixed, AudioBuffer& tail) {
+    if (fixed.frames() == 0U || tail.frames() == 0U ||
+        fixed.channels != tail.channels || fixed.sample_rate != tail.sample_rate) return;
+    const std::size_t ramp_frames = std::min<std::size_t>(
+        std::max<std::size_t>(1U, static_cast<std::size_t>(fixed.sample_rate / 2000U)),
+        tail.frames()); // approximately 0.5 ms
+    for (std::size_t i = 0U; i < ramp_frames; ++i) {
+        const double t = static_cast<double>(i + 1U) / static_cast<double>(ramp_frames);
+        for (std::size_t channel = 0U; channel < fixed.channels; ++channel) {
+            const double anchor = fixed.at(fixed.frames() - 1U, channel);
+            const double sample = tail.at(i, channel);
+            tail.at(i, channel) = static_cast<float>(anchor * (1.0 - t) + sample * t);
+        }
+    }
+}
+
+} // namespace
+
+ProcessResult renderPhase4(const AudioBuffer& input, const ResamplerParameters& p) {
+    if (!input.valid() || input.frames() == 0U) {
+        throw std::runtime_error("Input audio buffer is empty or invalid");
+    }
+    ProcessResult result;
+    const std::size_t offset = std::min(msToFrames(p.offset_ms, input.sample_rate), input.frames());
+    const std::size_t end_trim = std::min(msToFrames(p.end_blank_ms, input.sample_rate), input.frames() - offset);
+    const std::size_t source_end = input.frames() - end_trim;
+    if (source_end <= offset) {
+        throw std::runtime_error("Offset and end blank remove the entire input sample");
+    }
+
+    const AudioBuffer usable = slice(input, offset, source_end);
+    const std::size_t fixed_source = std::min(msToFrames(p.fixed_length_ms, input.sample_rate),
+                                              usable.frames());
+    const double fixed_scale = std::pow(2.0, (100.0 - p.velocity) / 100.0);
+    std::size_t fixed_target = static_cast<std::size_t>(std::llround(
+        static_cast<double>(fixed_source) * fixed_scale));
+
+    std::size_t target_frames = p.length_required_ms
+        ? msToFrames(*p.length_required_ms, input.sample_rate)
+        : fixed_target + (usable.frames() - fixed_source);
+    if (target_frames == 0U) throw std::runtime_error("Requested output duration is zero");
+    if (fixed_target > target_frames) {
+        result.warnings.emplace_back(
+            "Requested note duration is shorter than the velocity-adjusted fixed region; the fixed region was truncated");
+        fixed_target = target_frames;
+    }
+
+    const AudioBuffer fixed_source_audio = slice(usable, 0U, fixed_source);
+    AudioBuffer fixed_output = wsolaStretch(fixed_source_audio, fixed_target);
+    const AudioBuffer tail_source = slice(usable, fixed_source, usable.frames());
+    const std::size_t tail_target_frames = target_frames - fixed_target;
+    AudioBuffer tail_output;
+    tail_output.sample_rate = input.sample_rate;
+    tail_output.channels = input.channels;
+
+    if (tail_target_frames > 0U && tail_source.frames() > 0U) {
+        // WSOLA is the waveform-preserving path for consonants, unvoiced sounds,
+        // and transients. The harmonic path is blended in only where the analysis
+        // indicates stable voicing.
+        AudioBuffer preserved = wsolaStretch(tail_source, tail_target_frames);
+        dsp::AnalysisConfig analysis_config;
+        analysis_config.minimum_rms = 0.0010;
+        const dsp::AnalysisResult analysis = dsp::analyzeAudio(tail_source, analysis_config);
+        const dsp::PhoneticAnalysis phonetics = dsp::classifyPhonetics(analysis);
+
+        for (const auto& region : phonetics.regions) {
+            if (region.kind == dsp::PhoneticKind::Voiced) ++result.voiced_regions;
+            else if (region.kind == dsp::PhoneticKind::Transient) ++result.transient_regions;
+            else if (region.kind == dsp::PhoneticKind::Unvoiced) ++result.unvoiced_regions;
+        }
+
+        std::size_t stable_voiced_frames = 0U;
+        const double source_f0 = medianVoicedF0(analysis, phonetics, stable_voiced_frames);
+        result.estimated_source_f0_hz = source_f0;
+        if (source_f0 > 0.0 && stable_voiced_frames >= 3U) {
+            const double pitch_ratio = p.target_pitch_is_note
+                ? (440.0 * std::pow(2.0,
+                    (static_cast<double>(p.target_midi) - 69.0) / 12.0)) / source_f0
+                : p.pitch_percent / 100.0;
+            result.pitch_ratio = pitch_ratio;
+            const double stretch_ratio = static_cast<double>(tail_target_frames) /
+                                         static_cast<double>(tail_source.frames());
+
+            ResynthesisOptions synthesis_options;
+            synthesis_options.pitch_ratio = pitch_ratio;
+            synthesis_options.time_stretch_ratio = stretch_ratio;
+            synthesis_options.harmonic_gain = 1.0;
+            synthesis_options.aperiodic_gain = 0.12;
+            synthesis_options.preserve_spectral_envelope = true;
+            synthesis_options.edge_fade_ms = 0.0;
+            synthesis_options.output_channels = 1U;
+            const ResynthesisResult synthesized = resynthesize(analysis, synthesis_options);
+
+            if (synthesized.audio.frames() == tail_target_frames &&
+                synthesized.audio.channels == 1U) {
+                tail_output = std::move(preserved);
+                std::size_t segment = 0U;
+                const double dry_floor = 0.16; // Retain a little original breath and texture.
+                for (std::size_t frame = 0U; frame < tail_target_frames; ++frame) {
+                    const double source_position = static_cast<double>(frame) / stretch_ratio;
+                    const double confidence = std::clamp(voicedWeightAt(
+                        analysis, phonetics, source_position, segment), 0.0, 1.0);
+                    const double wet = confidence * (1.0 - dry_floor);
+                    const double dry = 1.0 - wet;
+                    const double resynth_sample = synthesized.audio.samples[frame];
+                    for (std::size_t channel = 0U; channel < tail_output.channels; ++channel) {
+                        const double original_sample = tail_output.at(frame, channel);
+                        const double mixed = original_sample * dry + resynth_sample * wet;
+                        tail_output.at(frame, channel) = static_cast<float>(
+                            std::isfinite(mixed) ? mixed : 0.0);
+                    }
+                }
+                result.warnings.emplace_back(
+                    "Voiced material was reconstructed with harmonic resynthesis; unvoiced and transient material remained waveform-preserved");
+            } else {
+                tail_output = std::move(preserved);
+                result.warnings.emplace_back(
+                    "Resynthesis duration did not match the timing target; waveform-preserving WSOLA was used for the tail");
+            }
+        } else {
+            tail_output = std::move(preserved);
+            result.warnings.emplace_back(
+                "No stable voiced region was detected; the entire non-fixed tail used waveform-preserving time stretching");
+        }
+    } else if (tail_target_frames > 0U) {
+        tail_output.samples.assign(tail_target_frames * tail_output.channels, 0.0F);
+        result.warnings.emplace_back("The source has no tail after the fixed region; the requested remainder was filled with silence");
+    }
+
+    applyJoinRamp(fixed_output, tail_output);
+    result.audio.sample_rate = input.sample_rate;
+    result.audio.channels = input.channels;
+    result.audio.samples.reserve(target_frames * input.channels);
+    append(result.audio, fixed_output);
+    append(result.audio, tail_output);
+    if (result.audio.frames() != target_frames) {
+        throw std::runtime_error("Internal timing error: Phase 4 output frame count does not match requested duration");
+    }
+
+    const double gain = p.volume_percent / 100.0;
+    double peak = 0.0;
+    for (float& sample : result.audio.samples) {
+        const double value = static_cast<double>(sample) * gain;
+        sample = static_cast<float>(std::isfinite(value) ? value : 0.0);
+        peak = std::max(peak, std::abs(static_cast<double>(sample)));
+    }
+    if (peak > 0.98) {
+        const double limiter_gain = 0.98 / peak;
+        for (float& sample : result.audio.samples) {
+            sample = static_cast<float>(static_cast<double>(sample) * limiter_gain);
+        }
+        result.warnings.emplace_back("A final peak guard reduced the output to prevent clipping");
+    }
+
+    if (p.modulation_percent != 0.0) {
+        result.warnings.emplace_back("Modulation remains a Phase 5 expression control and was not applied");
+    }
+    if (!p.pitch_bend_tokens.empty()) {
+        result.warnings.emplace_back("Pitch-bend tokens are parsed but pitch automation is scheduled for Phase 5");
+    }
+    if (!p.flags.empty()) {
+        result.warnings.emplace_back("Expression flags are parsed but their processing is scheduled for Phase 5: " + p.flags);
+    }
+    return result;
+}
+
+
+ResynthesisResult resynthesize(const dsp::AnalysisResult& analysis,
+                               const ResynthesisOptions& options) {
+    if (analysis.sample_rate == 0U || analysis.input_frames == 0U || analysis.frames.empty()) {
+        throw std::invalid_argument("Resynthesis requires a complete non-empty analysis result");
+    }
+    if (!(options.pitch_ratio > 0.0) || !std::isfinite(options.pitch_ratio) ||
+        !(options.time_stretch_ratio >= 0.25 && options.time_stretch_ratio <= 4.0) ||
+        !std::isfinite(options.time_stretch_ratio) ||
+        !(options.harmonic_gain >= 0.0) || !std::isfinite(options.harmonic_gain) ||
+        !(options.aperiodic_gain >= 0.0) || !std::isfinite(options.aperiodic_gain) ||
+        !(options.peak_limit > 0.0 && options.peak_limit <= 1.0) ||
+        !std::isfinite(options.peak_limit) || !(options.edge_fade_ms >= 0.0) ||
+        !std::isfinite(options.edge_fade_ms) ||
+        (options.output_channels != 1U && options.output_channels != 2U)) {
+        throw std::invalid_argument("Invalid resynthesis options");
+    }
+
+    dsp::HarmonicSynthesisOptions harmonic_options;
+    harmonic_options.pitch_ratio = options.pitch_ratio;
+    harmonic_options.time_stretch_ratio = options.time_stretch_ratio;
+    harmonic_options.gain = options.harmonic_gain;
+    harmonic_options.phase_observation_strength = options.phase_observation_strength;
+    harmonic_options.preserve_spectral_envelope = options.preserve_spectral_envelope;
+    harmonic_options.maximum_envelope_compensation = options.maximum_envelope_compensation;
+    const std::vector<float> harmonic = dsp::synthesizeHarmonicComponent(analysis, harmonic_options);
+
+    dsp::NoiseSynthesisOptions noise_options;
+    noise_options.gain = options.aperiodic_gain;
+    noise_options.time_stretch_ratio = options.time_stretch_ratio;
+    noise_options.random_seed = options.noise_seed;
+    noise_options.fft_size = options.noise_fft_size;
+    const std::vector<float> aperiodic = dsp::synthesizeAperiodicComponent(analysis, noise_options);
+
+    ResynthesisResult result;
+    result.audio.sample_rate = analysis.sample_rate;
+    result.audio.channels = options.output_channels;
+    const std::size_t output_frames = harmonic.size();
+    if (aperiodic.size() != output_frames) {
+        throw std::runtime_error("Harmonic and aperiodic synthesis lengths do not match");
+    }
+    result.audio.samples.resize(output_frames * options.output_channels, 0.0F);
+
+    const double fade_requested = options.edge_fade_ms *
+        static_cast<double>(analysis.sample_rate) / 1000.0;
+    const double maximum_fade = static_cast<double>(output_frames / 2U);
+    const std::size_t fade_frames = static_cast<std::size_t>(std::llround(
+        std::clamp(fade_requested, 0.0, maximum_fade)));
+    double harmonic_power = 0.0;
+    double aperiodic_power = 0.0;
+    double mixed_power = 0.0;
+    double peak = 0.0;
+
+    for (std::size_t frame = 0U; frame < output_frames; ++frame) {
+        double fade = 1.0;
+        if (fade_frames > 0U) {
+            if (frame < fade_frames) {
+                const double phase = static_cast<double>(frame + 1U) /
+                                     static_cast<double>(fade_frames);
+                fade *= 0.5 - 0.5 * std::cos(std::numbers::pi * phase);
+            }
+            const std::size_t remaining = output_frames - 1U - frame;
+            if (remaining < fade_frames) {
+                const double phase = static_cast<double>(remaining + 1U) /
+                                     static_cast<double>(fade_frames);
+                fade *= 0.5 - 0.5 * std::cos(std::numbers::pi * phase);
+            }
+        }
+        const double h = static_cast<double>(harmonic[frame]) * fade;
+        const double n = static_cast<double>(aperiodic[frame]) * fade;
+        const double mixed = h + n;
+        harmonic_power += h * h;
+        aperiodic_power += n * n;
+        mixed_power += mixed * mixed;
+        peak = std::max(peak, std::abs(mixed));
+        for (std::size_t channel = 0U; channel < options.output_channels; ++channel) {
+            result.audio.samples[frame * options.output_channels + channel] =
+                static_cast<float>(std::isfinite(mixed) ? mixed : 0.0);
+        }
+    }
+
+    const double frame_count = static_cast<double>(output_frames);
+    result.metrics.harmonic_rms = std::sqrt(harmonic_power / frame_count);
+    result.metrics.aperiodic_rms = std::sqrt(aperiodic_power / frame_count);
+    result.metrics.mixed_rms = std::sqrt(mixed_power / frame_count);
+    result.metrics.peak_before_limiter = peak;
+    if (peak > options.peak_limit) {
+        result.metrics.applied_gain = options.peak_limit / peak;
+        result.metrics.peak_limited = true;
+        for (float& sample : result.audio.samples) {
+            sample = static_cast<float>(static_cast<double>(sample) * result.metrics.applied_gain);
+        }
+        result.warnings.emplace_back("A global peak guard reduced output gain to prevent clipping");
+    }
+
+    if (analysis.summary.voiced_frames == 0U) {
+        result.warnings.emplace_back("No reliably voiced frames were detected; output contains only the aperiodic component");
+    }
+    if (options.pitch_ratio != 1.0 && options.preserve_spectral_envelope) {
+        result.warnings.emplace_back("Spectral-envelope compensation is an interpolated cepstral approximation, not a dedicated formant tracker");
+    }
+    if (options.output_channels == 2U) {
+        result.warnings.emplace_back("Analysis is mono-downmixed; stereo output duplicates the reconstructed mono signal");
+    }
     return result;
 }
 

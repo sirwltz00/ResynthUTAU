@@ -11,6 +11,8 @@ struct ResamplerParameters {
     std::string output_path;
     std::string target_note;
     int target_midi{60};
+    bool target_pitch_is_note{true};
+    double pitch_percent{100.0};
     double velocity{100.0};
     std::string flags;
     double offset_ms{0.0};
