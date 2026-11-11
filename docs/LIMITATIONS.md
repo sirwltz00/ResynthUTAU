@@ -57,6 +57,20 @@
 - The initial fixed-region velocity mapping is retained from the earlier project convention and is not claimed to match every UTAU host/resampler implementation.
 - Output is converted to PCM16, even when input is 24-bit or floating point.
 
+## Implemented in Phase 3
+
+- Harmonic oscillator-bank reconstruction from analyzed harmonic partial amplitudes.
+- Sample-by-sample oscillator phase integration based on interpolated F0.
+- Bounded, distributed phase corrections from local frame phase observations; no per-frame oscillator resets.
+- Linear interpolation of F0 and harmonic amplitudes between analysis frames.
+- Pitch-ratio transposition in the offline resynthesis API and `--resynthesize` command.
+- Optional spectral-envelope amplitude compensation using the compact cepstral profile.
+- Independent stochastic aperiodic/noise synthesis with spectral shaping from the estimated residual profile.
+- Deterministic random-phase generation for a fixed seed and build.
+- Window-power-normalized overlap-add for noise blocks.
+- Independent harmonic/noise gain controls, component metrics, edge fades, mono/stereo-container output, and global peak guard.
+- `--resynthesize input.wav output.wav [pitch_ratio]` diagnostic CLI.
+
 ## Not implemented
 
 - Pitch-bend curves, modulation, vibrato, portamento, and time-varying pitch automation.
