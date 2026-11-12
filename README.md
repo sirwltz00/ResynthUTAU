@@ -8,7 +8,7 @@ The project is a clean-room DSP implementation. It is inspired by publicly descr
 
 > **Compatibility status:** Version 0.6.0 builds and passes its local test suite. It provides a UTAU-style positional CLI, but it is **not yet a fully compatible OpenUtau Classic resampler**. In particular, the current source does not decode OpenUtau's Base64/run-length-encoded 12-bit pitch curve or implement its signed cutoff convention. The OpenUtau manifest is supplied for development/preview only. Actual UTAU/OpenUtau GUI integration has not been verified.
 
-## Current capabilities
+> **Current status:** Phases 1–6 are implemented locally and covered by synthetic regression tests. Phase 6 adds strict-but-tolerant RIFF/WAVE parsing, WAVE_FORMAT_EXTENSIBLE PCM/float support, reusable per-render DSP workspaces, capability reporting, and a reproducible benchmark. The supplied real sample renders identically to Phase 5.1 at neutral pitch and at six tested semitone ratios. Actual runtime testing inside UTAU/OpenUTAU Classic and Windows execution remain unverified.
 
 ### Audio analysis
 
