@@ -1,0 +1,162 @@
+name: Windows x64 package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '**'
+    paths:
+      - '.github/workflows/windows-x64-package.yml'
+      - 'CMakeLists.txt'
+      - 'include/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'ResynthUTAU.yaml'
+      - 'README.md'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'docs/**'
+      - 'scripts/build-windows-x64.ps1'
+  pull_request:
+    paths:
+      - '.github/workflows/windows-x64-package.yml'
+      - 'CMakeLists.txt'
+      - 'include/**'
+      - 'src/**'
+      - 'tests/**'
+      - 'ResynthUTAU.yaml'
+      - 'README.md'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES.md'
+      - 'docs/**'
+      - 'scripts/build-windows-x64.ps1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-x64-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-x64:
+    name: MSVC 2022 x64 Release / OpenUtau Classic
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Show CMake version
+        shell: pwsh
+        run: cmake --version
+
+      - name: Configure Visual Studio 2022 x64
+        shell: pwsh
+        run: >-
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          -DRESYNTHUTAU_BUILD_TESTS=ON
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: Build Release x64
+        shell: pwsh
+        run: cmake --build build --config Release --parallel
+
+      - name: Run CTest suite
+        shell: pwsh
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Verify Windows executable
+        shell: pwsh
+        run: |
+          $exe = 'build/Release/ResynthUTAU.exe'
+          if (-not (Test-Path $exe -PathType Leaf)) {
+            throw "MSVC did not produce $exe"
+          }
+
+          $version = & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw '--version failed' }
+          $version | Write-Host
+          if (($version -join ' ') -notmatch 'ResynthUTAU 0\.6\.1') {
+            throw "Unexpected executable version: $version"
+          }
+
+          $capabilities = & $exe --capabilities
+          if ($LASTEXITCODE -ne 0) { throw '--capabilities failed' }
+          $capabilityText = $capabilities -join "`n"
+          if ($capabilityText -notmatch 'openutau_classic') {
+            throw 'OpenUtau Classic capability metadata is missing.'
+          }
+          $capabilities | Write-Host
+
+      - name: Assemble Windows x64 OpenUtau package
+        shell: pwsh
+        env:
+          BUILD_COMMIT: ${{ github.sha }}
+          BUILD_RUN_ID: ${{ github.run_id }}
+          BUILD_RUN_NUMBER: ${{ github.run_number }}
+          BUILD_REF: ${{ github.ref }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $package = 'package'
+          if (Test-Path $package) { Remove-Item $package -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+
+          Copy-Item 'build/Release/ResynthUTAU.exe' $package
+          Copy-Item 'ResynthUTAU.yaml', 'README.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md' -Destination $package
+          Get-ChildItem 'docs' -Filter '*.md' -File | Copy-Item -Destination $package
+
+          @'
+          ResynthUTAU 0.6.1 — Windows x64 / OpenUtau Classic
+
+          INSTALLATION
+          1. Extract this ZIP.
+          2. In OpenUtau, select the CLASSIC renderer.
+          3. Install ResynthUTAU.exe through Tools > Install Wavtool/Resampler (.exe),
+             choosing the resampler option; or copy ResynthUTAU.exe and its matching
+             ResynthUTAU.yaml manifest into the Resamplers folder.
+          4. Select ResynthUTAU as the Classic renderer's resampler.
+          5. Configure the wavtool separately (for example, simple or convergence).
+
+          IMPORTANT
+          This is an external command-line resampler for OpenUtau Classic, not a native
+          OpenUtau renderer. Automated tests validate the adapter protocol, but do not
+          launch OpenUtau or certify end-to-end GUI compatibility. The target machine's
+          OpenUtau session is still required for final host verification.
+          '@ | Set-Content -Encoding UTF8 (Join-Path $package 'OPENUTAU-INSTALL.txt')
+
+          @"
+          Version: 0.6.1
+          Platform: Windows x64
+          Compiler: MSVC / Visual Studio 2022
+          Configuration: Release
+          Commit: $env:BUILD_COMMIT
+          GitHub Actions run: $env:BUILD_RUN_ID (run #$env:BUILD_RUN_NUMBER)
+          Ref: $env:BUILD_REF
+          "@ | Set-Content -Encoding UTF8 (Join-Path $package 'BUILD-INFO.txt')
+
+          if (Test-Path 'ResynthUTAU-windows-x64.zip') {
+            Remove-Item 'ResynthUTAU-windows-x64.zip' -Force
+          }
+          Compress-Archive -Path (Join-Path $package '*') `
+            -DestinationPath 'ResynthUTAU-windows-x64.zip' -CompressionLevel Optimal
+
+          $hash = (Get-FileHash 'ResynthUTAU-windows-x64.zip' -Algorithm SHA256).Hash
+          "$hash  ResynthUTAU-windows-x64.zip" |
+            Set-Content -Encoding ASCII 'SHA256SUMS.txt'
+
+          "### Windows x64 package created" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Artifact: ResynthUTAU-windows-x64" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- SHA-256: $hash" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Commit: $env:BUILD_COMMIT" | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload Windows x64 ZIP and checksum
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ResynthUTAU-windows-x64
+          path: |
+            ResynthUTAU-windows-x64.zip
+            SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

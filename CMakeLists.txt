@@ -1,10 +1,24 @@
 cmake_minimum_required(VERSION 3.20)
-project(ResynthUTAU VERSION 0.1.0 LANGUAGES CXX)
+project(ResynthUTAU VERSION 0.6.1 LANGUAGES CXX)
 
 option(RESYNTHUTAU_BUILD_TESTS "Build the automated test suite" ON)
 
+# Avoid a Visual C++ runtime DLL dependency in portable Windows resampler packages.
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 add_library(resynth_core
     src/AudioBuffer.cpp
+    src/FFT.cpp
+    src/PitchAnalyzer.cpp
+    src/HarmonicAnalyzer.cpp
+    src/SpectralEnvelope.cpp
+    src/NoiseAnalyzer.cpp
+    src/AnalysisEngine.cpp
+    src/PhoneticAnalyzer.cpp
+    src/HarmonicSynthesizer.cpp
+    src/NoiseSynthesizer.cpp
     src/WavReader.cpp
     src/WavWriter.cpp
     src/ParameterParser.cpp
@@ -22,6 +36,7 @@ endif()
 
 add_executable(ResynthUTAU src/main.cpp)
 target_link_libraries(ResynthUTAU PRIVATE resynth_core)
+target_compile_definitions(ResynthUTAU PRIVATE RESYNTHUTAU_VERSION="${PROJECT_VERSION}")
 set_target_properties(ResynthUTAU PROPERTIES OUTPUT_NAME "ResynthUTAU")
 if(WIN32)
     target_link_libraries(ResynthUTAU PRIVATE shell32)
@@ -32,4 +47,9 @@ if(RESYNTHUTAU_BUILD_TESTS)
     add_executable(resynth_tests tests/test_main.cpp)
     target_link_libraries(resynth_tests PRIVATE resynth_core)
     add_test(NAME resynth_tests COMMAND resynth_tests)
+endif()
+
+if(RESYNTHUTAU_BUILD_TESTS)
+    add_test(NAME cli_version COMMAND ResynthUTAU --version)
+    add_test(NAME cli_capabilities COMMAND ResynthUTAU --capabilities)
 endif()

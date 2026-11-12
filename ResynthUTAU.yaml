@@ -1,0 +1,168 @@
+# ResynthUTAU 0.6.1 expression manifest for OpenUtau Classic.
+# The external-resampler CLI adapter parses OpenUtau's 13 arguments, encoded pitch curve,
+# tempo token, and signed cutoff. Actual OpenUtau GUI/runtime compatibility is not yet tested.
+# Keep this file beside ResynthUTAU.exe and preserve the matching base name.
+expression_filter: true
+expressions:
+  gen:
+    name: Gender Factor
+    abbr: gen
+    type: Numerical
+    min: -100
+    max: 100
+    default_value: 0
+    is_flag: true
+    flag: g
+  pitchfine:
+    name: Fine Pitch
+    abbr: pitchfine
+    type: Numerical
+    min: -100
+    max: 100
+    default_value: 0
+    is_flag: true
+    flag: t
+  breath:
+    name: Breathiness
+    abbr: breath
+    type: Numerical
+    min: 0
+    max: 100
+    default_value: 0
+    is_flag: true
+    flag: br
+  breathclassic:
+    name: UTAU Breathiness (B)
+    abbr: breathclassic
+    type: Numerical
+    min: 0
+    max: 100
+    default_value: 0
+    is_flag: true
+    flag: B
+  formant:
+    name: Formant Shift
+    abbr: formant
+    type: Numerical
+    min: -24
+    max: 24
+    default_value: 0
+    is_flag: true
+    flag: sf
+  voltage:
+    name: Voice Voltage
+    abbr: voltage
+    type: Numerical
+    min: 0
+    max: 200
+    default_value: 100
+    is_flag: true
+    flag: vv
+  consonant:
+    name: Consonant Rate
+    abbr: consonant
+    type: Numerical
+    min: 50
+    max: 200
+    default_value: 100
+    is_flag: true
+    flag: cr
+  attack:
+    name: Attack Speed
+    abbr: attack
+    type: Numerical
+    min: 25
+    max: 200
+    default_value: 100
+    is_flag: true
+    flag: as
+  notegain:
+    name: Note Gain
+    abbr: notegain
+    type: Numerical
+    min: 0
+    max: 400
+    default_value: 100
+    is_flag: true
+    flag: ng
+  noise:
+    name: Noise Level
+    abbr: noise
+    type: Numerical
+    min: 0
+    max: 200
+    default_value: 100
+    is_flag: true
+    flag: nh
+  harmonics:
+    name: Harmonic Balance
+    abbr: harmonics
+    type: Numerical
+    min: 0
+    max: 200
+    default_value: 100
+    is_flag: true
+    flag: hb
+  dynamics:
+    name: Dynamics
+    abbr: dynamics
+    type: Numerical
+    min: 0
+    max: 200
+    default_value: 100
+    is_flag: true
+    flag: dy
+  vibrato:
+    name: Vibrato Depth
+    abbr: vibrato
+    type: Numerical
+    min: 0
+    max: 100
+    default_value: 0
+    is_flag: true
+    flag: vib
+  vibraterate:
+    name: Vibrato Rate
+    abbr: vibraterate
+    type: Numerical
+    min: 2
+    max: 10
+    default_value: 5.5
+    is_flag: true
+    flag: vr
+  brightness:
+    name: Spectral Brightness
+    abbr: brightness
+    type: Numerical
+    min: 0
+    max: 200
+    default_value: 100
+    is_flag: true
+    flag: sb
+  decay:
+    name: Decay
+    abbr: decay
+    type: Numerical
+    min: 0
+    max: 100
+    default_value: 0
+    is_flag: true
+    flag: dc
+  lowpass:
+    name: Low-pass Filter
+    abbr: lowpass
+    type: Numerical
+    min: 0
+    max: 99
+    default_value: 0
+    is_flag: true
+    flag: H
+  noisesuppress:
+    name: Noise Suppression
+    abbr: noisesuppress
+    type: Numerical
+    min: 0
+    max: 100
+    default_value: 0
+    is_flag: true
+    flag: Y
