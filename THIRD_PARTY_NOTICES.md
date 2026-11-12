@@ -1,6 +1,6 @@
 # Third-party notices
 
-ResynthUTAU Phase 1 currently uses only the C++ standard library and the CMake build system. No third-party DSP or audio library is linked into the executable.
+ResynthUTAU Phase 1 and Phase 2 use only the C++ standard library and the CMake build system. No third-party DSP, FFT, or audio library is linked into the executable. The FFT, pitch, harmonic, spectral-envelope, and aperiodicity analysis code is implemented in this repository.
 
 The GitHub Actions workflows use the following maintained official actions, pinned to immutable commit references:
 

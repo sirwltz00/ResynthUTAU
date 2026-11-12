@@ -19,7 +19,7 @@ std::filesystem::path pathFromUtf8(const std::string& value) {
 
 RenderReport renderUtauInvocation(const ResamplerParameters& parameters) {
     const WavReadResult input = readWav(pathFromUtf8(parameters.input_path));
-    ProcessResult processed = renderPhase1(input.audio, parameters);
+    ProcessResult processed = renderPhase5(input.audio, parameters);
     const std::filesystem::path output_path = pathFromUtf8(parameters.output_path);
     if (output_path.has_parent_path()) {
         std::error_code ec;
