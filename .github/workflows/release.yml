@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Git tag to publish (for example v0.1.0)'
+        description: 'Git tag to publish (for example v0.6.0)'
         required: true
         type: string
 
@@ -49,8 +49,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path package | Out-Null
           Copy-Item build/Release/ResynthUTAU.exe package/
-          Copy-Item README.md, LICENSE, THIRD_PARTY_NOTICES.md package/
-          Copy-Item docs/FLAGS.md, docs/UTAU_COMPATIBILITY.md package/
+          Copy-Item README.md, LICENSE, THIRD_PARTY_NOTICES.md, ResynthUTAU.yaml package/
+          Copy-Item docs/*.md package/
           Compress-Archive -Path package/* -DestinationPath ResynthUTAU-windows-x64.zip -Force
           Get-FileHash ResynthUTAU-windows-x64.zip -Algorithm SHA256 | ForEach-Object { "$($_.Hash)  ResynthUTAU-windows-x64.zip" } | Set-Content SHA256SUMS.txt
 
@@ -59,8 +59,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p package
-          cp build/ResynthUTAU README.md LICENSE THIRD_PARTY_NOTICES.md package/
-          cp docs/FLAGS.md docs/UTAU_COMPATIBILITY.md package/
+          cp build/ResynthUTAU README.md LICENSE THIRD_PARTY_NOTICES.md ResynthUTAU.yaml package/
+          cp docs/*.md package/
           tar -czf ResynthUTAU-linux-x64.tar.gz -C package .
           sha256sum ResynthUTAU-linux-x64.tar.gz > SHA256SUMS.txt
 

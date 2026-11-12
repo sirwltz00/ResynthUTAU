@@ -38,5 +38,6 @@ jobs:
             build/ResynthUTAU
             build/Release/resynth_tests.exe
             build/resynth_tests
+            ResynthUTAU.yaml
           if-no-files-found: warn
           retention-days: 14

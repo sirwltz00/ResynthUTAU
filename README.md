@@ -1,62 +1,128 @@
 # ResynthUTAU
 
-**Phase 1 foundation — version 0.1.0**
-Independent C++20 UTAU resampler foundation. The long-term direction is a harmonic-plus-aperiodic resynthesis engine inspired by publicly described vocal-synthesis principles associated with Piapro Studio NT. This project is not affiliated with or endorsed by Crypton Future Media or Yamaha, and it does not reproduce their proprietary software or undocumented algorithms.
+**Version 0.6.0 — Phase 6: WAV/CLI hardening and performance**
 
-> **Important status note:** This is a working Phase 1 foundation, not the completed resynthesis engine described in the development roadmap. It reads WAV samples, applies offset/end-blank trimming, a waveform-domain WSOLA-style duration adjustment, fixed-region/velocity handling, volume, and writes PCM16 WAV. It currently preserves the source pitch. Harmonic analysis, aperiodic analysis, pitch/formant reconstruction, pitch bends, and expression flags are not yet implemented. The program prints warnings for those unimplemented controls rather than pretending they work.
+ResynthUTAU is an independent C++20 vocal analysis and resynthesis project with a UTAU-style positional command-line renderer. Its default voiced pitch-shifting path uses waveform-derived TD-PSOLA, while WSOLA preserves the fixed region, unvoiced material, and transients. An alternate harmonic/aperiodic synthesis path supplies expression controls that require spectral or oscillator processing.
+
+The project is a clean-room DSP implementation. It is inspired by publicly described vocal-synthesis goals, but it is not affiliated with Crypton Future Media or Yamaha and does not claim to reproduce Piapro Studio NT, VOCALOID, or any other proprietary engine.
+
+> **Compatibility status:** Version 0.6.0 builds and passes its local test suite. It provides a UTAU-style positional CLI, but it is **not yet a fully compatible OpenUtau Classic resampler**. In particular, the current source does not decode OpenUtau's Base64/run-length-encoded 12-bit pitch curve or implement its signed cutoff convention. The OpenUtau manifest is supplied for development/preview only. Actual UTAU/OpenUtau GUI integration has not been verified.
 
 ## Current capabilities
 
-- C++20 and CMake; no Python, Node.js, MATLAB, or runtime dependency for the executable.
-- Classic RIFF/WAVE input: PCM 16/24/32-bit and IEEE float 32/64-bit, mono or stereo.
-- PCM16 WAV output at the source sample rate.
-- Unicode Windows command-line argument conversion and filesystem path handling.
-- UTAU-style positional argument parsing, note-name validation, and safe range checks.
-- Offset and end-blank trimming in milliseconds.
-- Required duration with sample-count-accurate output length.
-- Fixed-region duration adjustment driven by velocity, followed by a WSOLA-style waveform time stretch for the remaining region.
-- Volume percentage and finite-value/clipping protection.
-- CTest unit tests and Windows/Linux GitHub Actions workflows.
+### Audio analysis
 
-## Synthesis architecture
+- Radix-2 FFT and inverse FFT.
+- FFT-autocorrelation YIN F0 estimation with parabolic lag refinement and periodicity confidence.
+- Adaptive analysis windows, harmonic partial measurements, centered phase observations, cepstral spectral-envelope estimation, and aperiodicity profiles.
+- RMS, spectral centroid, spectral flatness, voiced/unvoiced classification, and JSON analysis reports.
 
-The planned destination architecture is harmonic-plus-aperiodic resynthesis. Phase 1 intentionally implements only the WAV and command-line foundation plus waveform-domain duration rendering. It does **not** yet claim to analyze or reconstruct harmonic and noise components. See [ARCHITECTURE.md](docs/ARCHITECTURE.md), [DSP_ALGORITHMS.md](docs/DSP_ALGORITHMS.md) and [LIMITATIONS.md](docs/LIMITATIONS.md).
+### Resynthesis and timing
 
-## Installation in UTAU / OpenUTAU Classic
+- Default neutral and pitch-shifted voiced path: waveform-derived TD-PSOLA with sub-sample pitch-mark refinement.
+- WSOLA waveform path for the initial fixed region, unvoiced material, transients, and the natural-path fallback.
+- A conservative acoustic classifier for silence, voiced, unvoiced, and transient regions. It does not identify language-specific phonemes.
+- Offset, end trimming, fixed-region duration, required output duration, velocity scaling, volume, and exact output-frame count.
+- A separate phase-continuous harmonic/aperiodic path for controls that require oscillator or spectral processing.
+- Peak protection and finite-value checks.
 
-1. Build or download the Windows x64 executable from a tagged GitHub Release once one has been published.
-2. Place `ResynthUTAU.exe` in a stable folder.
-3. In UTAU, set the resampler path in Project Properties. In OpenUTAU, select the Classic renderer and configure the resampler there.
-4. Test with a copy of a voicebank and a short project first.
+### Expression controls
 
-This Phase 1 build is useful for testing command-line invocation, WAV handling, output timing, and basic duration processing. Because pitch shifting is not implemented yet, it is **not ready for normal singing production**.
+- Standard-compatible project mappings for `g`, `t`, `B`, `H`, and `Y`.
+- Custom controls: `br`, `sf`, `vv`, `cr`, `as`, `ng`, `nh`, `hb`, `dy`, `vib`, `vr`, `sb`, and `dc`/`dec`.
+- Continuous cents-based pitch points and vibrato on the harmonic expression path.
+- Full ranges, defaults, and the clean-room meaning of each flag are documented in [docs/FLAGS.md](docs/FLAGS.md).
+
+### Phase 6 file handling and performance work
+
+- RIFF/WAVE validation for container size, chunk boundaries, padding, block alignment, and frame alignment.
+- PCM16/24/32 and IEEE-float32/64 input, including WAVE_FORMAT_EXTENSIBLE with standard PCM or IEEE-float subtype GUIDs.
+- Mono and stereo input; PCM16 output at the original sample rate and channel count.
+- Reusable per-render pitch-analysis workspaces and precomputed Hann-window tables.
+- `--version` and `--capabilities` diagnostic commands.
+- A Python benchmark script for measuring fresh-process render time and real-time factor.
+
+## Important OpenUtau limitation
+
+OpenUtau Classic currently appends a tempo token (`!<tempo>`) and a Base64-encoded, run-length-compressed 12-bit pitch array to its external-resampler command line. This source snapshot only accepts literal numeric cents tokens and an optional `Q<tempo>` convention; it does not decode the OpenUtau payload. It also treats the ninth argument as a non-negative end-blank duration, not OpenUtau's signed cutoff field. Therefore do not treat the current package as fully OpenUtau-compatible until the adapter and host tests are completed. See [docs/UTAU_COMPATIBILITY.md](docs/UTAU_COMPATIBILITY.md) and [docs/OPENUTAU_INTEGRATION.md](docs/OPENUTAU_INTEGRATION.md).
 
 ## Command-line usage
 
-```text
-ResynthUTAU <input.wav> <output.wav> <pitch_note> <velocity> [flags [offset_ms length_required_ms [fixed_length_ms [end_blank_ms [volume_percent [modulation_percent [pitch_bend...]]]]]]]
-```
-
-Example (the `-` placeholder keeps the optional flags slot empty while supplying timing values):
+The positional interface implemented by this project is:
 
 ```text
-ResynthUTAU input.wav output.wav C4 100 - 0 500 100 0 100 0
+ResynthUTAU <input.wav> <output.wav> <pitch_percent_or_note> <velocity> [flags [offset_ms [length_required_ms [fixed_length_ms [end_blank_ms [volume_percent [modulation_percent [pitch_bend_tokens...]]]]]]]]
 ```
 
-The pitch note is validated (for example `C4`, `F#3`, or `Bb4`) but is not applied in Phase 1. The `velocity` value is accepted from 0 to 200. The current fixed-region time multiplier is `2^((100 - velocity) / 100)`, so 100 leaves that region unchanged, 0 doubles its duration, and 200 halves it. This is an explicit project convention for the Phase 1 renderer, not a claim about Crypton's or every historical UTAU engine's internal scaling.
+Example: render a note target with a 50 ms fixed region and a 650 ms output:
 
-See [UTAU_COMPATIBILITY.md](docs/UTAU_COMPATIBILITY.md) for argument behavior and [FLAGS.md](docs/FLAGS.md) for the current flag status.
+```bash
+ResynthUTAU voice.wav rendered.wav A#3 100 - 0 650 50 0 100 0
+```
+
+Example: apply a relative 1.2× frequency ratio:
+
+```bash
+ResynthUTAU voice.wav rendered.wav 120 100 - 0 650 50 0 100 0
+```
+
+The third argument accepts either a note name such as `A#3` or a numeric pitch percentage from 1 to 400 (`100` means unchanged F0; `120` means a 1.2× ratio). When later positional arguments are supplied without flags, use `-` as the empty flag placeholder.
+
+This project's optional trailing pitch points are literal cents values. A leading `Q<tempo>` selects the project's tempo grid. They are **not** OpenUtau's encoded Base64 pitch curve. See [docs/UTAU_COMPATIBILITY.md](docs/UTAU_COMPATIBILITY.md) for the exact argument mapping and limitations.
+
+## Diagnostic commands
+
+```bash
+ResynthUTAU --version
+ResynthUTAU --capabilities
+ResynthUTAU --analyze voice_sample.wav [report.json]
+ResynthUTAU --resynthesize voice_sample.wav reconstructed.wav [pitch_ratio]
+```
+
+`--analyze` prints a summary and optionally writes detailed JSON. `--resynthesize` is the standalone Phase 3 analysis-to-waveform diagnostic; the conventional positional invocation uses the timing, phonetic, and expression renderer.
+
+## Build and test
+
+Requirements: CMake 3.20+ and a C++20 compiler. MSVC 2022, GCC 11+, or Clang 14+ are recommended. The executable has no third-party runtime DSP or audio-library dependency. Python 3 is only required for the optional benchmark script.
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DRESYNTHUTAU_BUILD_TESTS=ON
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+```
+
+See [docs/BUILDING.md](docs/BUILDING.md), [docs/TESTING.md](docs/TESTING.md), [docs/PERFORMANCE.md](docs/PERFORMANCE.md), and [docs/FLAGS.md](docs/FLAGS.md).
 
 ## Platforms
 
-- **Windows 10/11 x64:** primary target; produces `ResynthUTAU.exe`.
-- **Linux x64:** supported as a development/test build; package availability depends on the tagged release workflow.
-- **macOS:** not yet configured or tested.
+- **Windows x64:** a Windows build is configured in GitHub Actions; this local Phase 6 session did not run the resulting executable on Windows.
+- **Linux x64:** built and tested locally.
+- **macOS:** not configured or verified.
+- **Android/iOS:** no native mobile build is provided.
 
-## Builds and downloads
+## Known limitations
 
-Every push and pull request is configured to build and test on Windows and Ubuntu using GitHub Actions. Tagged versions (`v*`) trigger a release workflow that packages Windows and Linux builds and SHA-256 checksums. No binary is included in the source repository. Releases will appear on the repository's GitHub Releases page after the workflow is run successfully.
+- No complete OpenUtau Classic argument adapter yet: Base64/run-length pitch data and signed cutoff semantics are not implemented.
+- No native OpenUtau renderer API integration.
+- No runtime host validation in UTAU or OpenUtau GUI.
+- The phonetic classifier is acoustic and heuristic; it does not parse `oto.ini`, aliases, reclists, or phonemizer output.
+- Very short consonants and difficult transients can be smeared by WSOLA or misclassified by the acoustic detector.
+- F0 estimates can be unreliable on very breathy, noisy, polyphonic, or strongly varying material.
+- The cepstral spectral envelope is not a dedicated high-resolution formant tracker. Extreme shifts can change vowel colour unnaturally.
+- The stochastic aperiodic path is shaped by an estimated residual; it does not recover the exact original noise waveform or phase.
+- Expression controls are clean-room DSP approximations, not physical vocal-fold parameters or proprietary flag replicas.
+- The natural TD-PSOLA path has been tested on synthetic signals and a supplied short sample, but broader perceptual testing across voicebanks and phonation styles is still needed.
+- RF64, compressed WAV codecs, more than two channels, and data chunks above 512 MiB are unsupported.
 
-## Development status
+See [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for the detailed status.
 
-The implementation is deliberately staged. A passing Phase 1 build does not mean that the full harmonic-plus-aperiodic engine is complete. The next engineering stages are analysis, harmonic/noise separation, continuous-phase resynthesis, formant processing, pitch automation, phonetic/transient handling, and compatibility testing in real UTAU/OpenUTAU Classic projects.
+## Roadmap
+
+1. **Phase 1 — functional foundation:** implemented.
+2. **Phase 2 — audio analysis:** implemented.
+3. **Phase 3 — harmonic/aperiodic analysis-to-resynthesis:** implemented as a diagnostic/offline path.
+4. **Phase 4 — timing and phonetics:** implemented with acoustic region classification and WSOLA/voiced synthesis integration.
+5. **Phase 5 — expression controls:** implemented as documented project-specific controls.
+6. **Phase 5.1 — natural voiced refinement:** TD-PSOLA pitch-mark refinement, independent pitch/duration mapping, and cleaner correlated-path transitions implemented.
+7. **Phase 6 — WAV/CLI hardening and optimization:** implemented and locally tested.
+8. **Phase 7 — host compatibility:** implement OpenUtau's encoded pitch/cutoff arguments, validate the manifest, and run real host tests on Windows and Linux before calling it a host-tested release.
