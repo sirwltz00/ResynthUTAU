@@ -8,7 +8,7 @@ The project is a clean-room DSP implementation. It is inspired by publicly descr
 
 > **Compatibility status:** Version 0.6.1 implements OpenUtau Classic's 13-argument external-resampler command-line adapter, including its `!tempo` token, signed 12-bit Base64/run-length pitch curve, and signed cutoff semantics. Automated adapter tests pass. However, no real OpenUtau GUI session has launched this build yet, so host integration remains **unverified**, not guaranteed. It is an external Classic resampler, not a native OpenUtau renderer.
 
-## Current capabilities
+The project is a clean-room DSP implementation. It is inspired by publicly described vocal-synthesis goals, but it is not affiliated with Crypton Future Media or Yamaha and does not claim to reproduce Piapro Studio NT, VOCALOID, or any other proprietary engine.
 
 ### Audio analysis
 
